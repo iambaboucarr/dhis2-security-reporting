@@ -172,18 +172,7 @@
         name: "DHIS2 Hourly Critical Check"
         minute: "0"
         hour: "*"
-        job: |
-          lxc exec dhis -- bash -c '
-            if systemctl list-units --all | grep -q tomcat10; then
-              T=tomcat10
-            else
-              T=tomcat9
-            fi
-            ERRORS=$(journalctl -u "$T" --since "1 hour ago" 2>/dev/null | grep -E "ERROR|FATAL|CRITICAL" | wc -l)
-            if [ "$ERRORS" -gt 50 ]; then
-              echo "Critical: $ERRORS errors in DHIS2 last hour" | {{ security_monitor_dir }}/send-telegram.sh /dev/stdin
-            fi
-          '
+        job: 'lxc exec dhis -- bash -c "if systemctl list-units --all | grep -q tomcat10; then T=tomcat10; else T=tomcat9; fi; ERRORS=\$(journalctl -u \$T --since \"1 hour ago\" 2>/dev/null | grep -E \"ERROR|FATAL|CRITICAL\" | wc -l); if [ \$ERRORS -gt 50 ]; then echo \"Critical: \$ERRORS errors in DHIS2 last hour\" | {{ security_monitor_dir }}/send-telegram.sh /dev/stdin; fi"'
         user: root
         state: present
 

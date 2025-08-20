@@ -249,6 +249,19 @@
         msg: "WARNING: Telegram credentials not configured. Please set bot_token and chat_id"
       when: telegram_validation.failed | default(false)
 
+    - name: Run security check immediately
+      ansible.builtin.command: "{{ security_monitor_dir }}/security-check.sh"
+      register: security_test
+      changed_when: false
+      failed_when: false
+
+    - name: Display security check result
+      ansible.builtin.debug:
+        msg:
+          - "Security check completed!"
+          - "Check your Telegram for the actual security report."
+          - "{{ security_test.stdout_lines | default(['No output']) | last }}"
+
     - name: Display completion message
       ansible.builtin.debug:
         msg:

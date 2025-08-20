@@ -1,0 +1,39 @@
+# Temporary files
+*.retry
+*.log
+*.tmp
+.ansible/cp/
+.ansible/
+
+# Inventory specific files (if managed separately or dynamically generated)
+inventories/group_vars/*.vault
+inventories/host_vars/*.vault
+inventories/dynamic_inventory.pyc
+inventories/dynamic_inventory.cache
+
+# Sensitive data (e.g., vault files, unless explicitly intended for version control)
+*.vault
+.vault_pass.txt
+
+# Editor/IDE specific files
+.idea/
+.vscode/
+*.swp
+*~
+
+# Python-specific files (if using Python for custom modules or dynamic inventory)
+*.pyc
+__pycache__/
+venv/
+.venv/
+
+# Build artifacts (if any)
+build/
+dist/
+
+# Role-specific temporary files or generated files
+roles/*/files/*.tmp
+roles/*/templates/*.tmp
+
+# Collection build artifacts (if creating Ansible collections)
+collection_build/

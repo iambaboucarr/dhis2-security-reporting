@@ -70,39 +70,43 @@
           " >> "$REPORT" 2>/dev/null || echo "  No issues" >> "$REPORT"
 
           # SQL injection attempts in nginx
-          SQLI=$(lxc exec proxy -- grep -cE "(union.*select|drop.*table|<script|javascript:|onerror=)" /var/log/nginx/access.log 2>/dev/null || echo 0)
-          [ "$SQLI" -gt 0 ] && echo "  SQL injection attempts: $SQLI" >> "$REPORT"
+          SQLI=$(lxc exec proxy -- grep -cE "(union.*select|drop.*table|<script|javascript:|onerror=)" /var/log/nginx/access.log 2>/dev/null || echo "0")
+          if [ "$SQLI" -gt "0" ]; then
+            echo "  SQL injection attempts: $SQLI" >> "$REPORT"
+          fi
 
           # Check DHIS container
           echo -e "\nDHIS Application" >> "$REPORT"
-          lxc exec dhis -- bash -c "
+          lxc exec dhis -- bash -c '
             # Detect tomcat version (tomcat9 for Ubuntu 22.04, tomcat10 for Ubuntu 24.04)
             if systemctl list-units --all | grep -q tomcat10; then
-              TOMCAT_SERVICE='tomcat10'
+              TOMCAT_SERVICE="tomcat10"
             else
-              TOMCAT_SERVICE='tomcat9'
+              TOMCAT_SERVICE="tomcat9"
             fi
 
             # Check tomcat logs for authentication and authorization issues, errors, and exceptions
-            journalctl -u "$TOMCAT_SERVICE" --since '24 hours ago' 2>/dev/null | \
-              grep -iE 'authentication.*fail|unauthorized|forbidden|error|exception' | \
-              tail -10 | cut -c1-160 | sed 's/^/  /'
+            journalctl -u "$TOMCAT_SERVICE" --since "24 hours ago" 2>/dev/null | \
+              grep -iE "authentication.*fail|unauthorized|forbidden|error|exception" | \
+              tail -10 | cut -c1-160 | sed "s/^/  /"
             # Also check /opt/dhis2/logs if it exists, limit output line length
             if [ -d /opt/dhis2/logs ]; then
-              grep -iE 'authentication.*fail|unauthorized|forbidden' /opt/dhis2/logs/*.log 2>/dev/null | \
-                tail -5 | cut -c1-160 | sed 's/^/  /'
+              grep -iE "authentication.*fail|unauthorized|forbidden" /opt/dhis2/logs/*.log 2>/dev/null | \
+                tail -5 | cut -c1-160 | sed "s/^/  /"
             fi
-          " >> "$REPORT" 2>/dev/null || echo "  No issues" >> "$REPORT"
+          ' >> "$REPORT" 2>/dev/null || echo "  No issues" >> "$REPORT"
 
           # Failed login count from journalctl (detect tomcat version)
-          FAILED_LOGINS=$(lxc exec dhis -- bash -c "
+          FAILED_LOGINS=$(lxc exec dhis -- bash -c '
             if systemctl list-units --all | grep -q tomcat10; then
-              journalctl -u tomcat10 --since '24 hours ago' 2>/dev/null | grep -c 'authentication.*fail' || echo 0
+              journalctl -u tomcat10 --since "24 hours ago" 2>/dev/null | grep -ic "authentication.*fail" || echo "0"
             else
-              journalctl -u tomcat9 --since '24 hours ago' 2>/dev/null | grep -c 'authentication.*fail' || echo 0
+              journalctl -u tomcat9 --since "24 hours ago" 2>/dev/null | grep -ic "authentication.*fail" || echo "0"
             fi
-          ")
-          [ "$FAILED_LOGINS" -gt 10 ] && echo "  High failed logins: $FAILED_LOGINS" >> "$REPORT"
+          ')
+          if [ "$FAILED_LOGINS" -gt "10" ]; then
+            echo "  High failed logins: $FAILED_LOGINS" >> "$REPORT"
+          fi
 
           # Check PostgreSQL container
           echo -e "\nPostgreSQL" >> "$REPORT"
@@ -136,23 +140,47 @@
         group: root
         content: |
           #!/bin/bash
+          
+          # Check if report file is provided
+          if [ $# -eq 0 ]; then
+            echo "Usage: $0 <report_file>"
+            echo "Or pipe input: echo 'message' | $0 /dev/stdin"
+            exit 1
+          fi
+          
           REPORT="$1"
           TOKEN="{{ telegram_bot_token }}"
           CHAT_ID="{{ telegram_chat_id }}"
+          
+          # Check if report file exists or is stdin
+          if [ "$REPORT" != "/dev/stdin" ] && [ ! -f "$REPORT" ]; then
+            echo "Error: Report file '$REPORT' not found"
+            exit 1
+          fi
 
           # Send summary (first 30 lines for better visibility)
-          TEXT=$(head -30 "$REPORT")
-          curl -s -X POST "https://api.telegram.org/bot${TOKEN}/sendMessage" \
-            -d "chat_id=${CHAT_ID}" \
-            -d "text=${TEXT}" \
-            -d "parse_mode=HTML" > /dev/null 2>&1
+          TEXT=$(head -30 "$REPORT" 2>/dev/null)
+          
+          if [ -n "$TEXT" ]; then
+            curl -s -X POST "https://api.telegram.org/bot${TOKEN}/sendMessage" \
+              -d "chat_id=${CHAT_ID}" \
+              -d "text=${TEXT}" \
+              -d "parse_mode=HTML" > /dev/null 2>&1
+            echo "Message sent to Telegram"
+          else
+            echo "Error: No content to send"
+            exit 1
+          fi
 
-          # Send full report as document if there are critical issues
-          if grep -qE "High failed logins|SQL injection|Failed services|Disk usage" "$REPORT"; then
-            curl -s -F "chat_id=${CHAT_ID}" \
-              -F "document=@${REPORT}" \
-              -F "caption=Full Security Report - Critical Issues Detected" \
-              "https://api.telegram.org/bot${TOKEN}/sendDocument" > /dev/null 2>&1
+          # Send full report as document if there are critical issues and it's a file
+          if [ "$REPORT" != "/dev/stdin" ] && [ -f "$REPORT" ]; then
+            if grep -qE "High failed logins|SQL injection|Failed services|Disk usage" "$REPORT" 2>/dev/null; then
+              curl -s -F "chat_id=${CHAT_ID}" \
+                -F "document=@${REPORT}" \
+                -F "caption=Full Security Report - Critical Issues Detected" \
+                "https://api.telegram.org/bot${TOKEN}/sendDocument" > /dev/null 2>&1
+              echo "Full report document sent"
+            fi
           fi
 
           # Cleanup old reports
@@ -167,12 +195,32 @@
         user: root
         state: present
 
+    - name: Deploy hourly check script
+      ansible.builtin.copy:
+        dest: "{{ security_monitor_dir }}/hourly-check.sh"
+        mode: "0755"
+        owner: root
+        group: root
+        content: |
+          #!/bin/bash
+          lxc exec dhis -- bash -c '
+            if systemctl list-units --all | grep -q tomcat10; then
+              T=tomcat10
+            else
+              T=tomcat9
+            fi
+            ERRORS=$(journalctl -u "$T" --since "1 hour ago" 2>/dev/null | grep -E "ERROR|FATAL|CRITICAL" | wc -l)
+            if [ "$ERRORS" -gt 50 ]; then
+              echo "Critical: $ERRORS errors in DHIS2 last hour"
+            fi
+          ' | {{ security_monitor_dir }}/send-telegram.sh /dev/stdin
+
     - name: Setup hourly critical check using journalctl
       ansible.builtin.cron:
         name: "DHIS2 Hourly Critical Check"
         minute: "0"
         hour: "*"
-        job: 'lxc exec dhis -- bash -c "if systemctl list-units --all | grep -q tomcat10; then T=tomcat10; else T=tomcat9; fi; ERRORS=\$(journalctl -u \$T --since \"1 hour ago\" 2>/dev/null | grep -E \"ERROR|FATAL|CRITICAL\" | wc -l); if [ \$ERRORS -gt 50 ]; then echo \"Critical: \$ERRORS errors in DHIS2 last hour\" | {{ security_monitor_dir }}/send-telegram.sh /dev/stdin; fi"'
+        job: "{{ security_monitor_dir }}/hourly-check.sh"
         user: root
         state: present
 

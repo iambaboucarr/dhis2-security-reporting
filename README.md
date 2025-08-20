@@ -10,7 +10,7 @@
 
 2. **Run Playbook:**
    ```bash
-   ansible-playbook ansible-playbook.yml \
+   ansible-playbook playbook.yml \
      -e "bot_token=YOUR_TOKEN" \
      -e "chat_id=YOUR_CHAT_ID"
    ```

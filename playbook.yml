@@ -6,7 +6,9 @@
   vars:
     telegram_bot_token: "{{ bot_token | default('YOUR_BOT_TOKEN') }}"
     telegram_chat_id: "{{ chat_id | default('YOUR_CHAT_ID') }}"
-    alert_time: "07:00"
+    alert_time: "{{ alert_time_input | default('07:00') }}"
+    alert_hour: "{{ alert_time.split(':')[0] }}"
+    alert_minute: "{{ alert_time.split(':')[1] | default('00') }}"
     security_monitor_dir: /opt/security-monitor
     containers:
       dhis: dhis
@@ -53,6 +55,7 @@
           HOSTNAME=$(hostname -f)
           REPORT="/tmp/security-report-$(date +%Y%m%d).txt"
 
+          # Header
           echo "DHIS2 Security Report - $HOSTNAME" > "$REPORT"
           echo "$DATE" >> "$REPORT"
           echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━" >> "$REPORT"
@@ -79,18 +82,19 @@
             else
               TOMCAT_SERVICE='tomcat9'
             fi
-            # Check tomcat logs via journalctl (as per dhis2-server-tools)
-            journalctl -u "$TOMCAT_SERVICE" --since '24 hours ago' 2>/dev/null \
-              | grep -iE 'authentication.*fail|unauthorized|forbidden|error|exception' \
-              | tail -10 | sed 's/^/  /'
-            # Also check /opt/dhis2/logs if it exists
+
+            # Check tomcat logs for authentication and authorization issues, errors, and exceptions
+            journalctl -u "$TOMCAT_SERVICE" --since '24 hours ago' 2>/dev/null | \
+              grep -iE 'authentication.*fail|unauthorized|forbidden|error|exception' | \
+              tail -10 | cut -c1-160 | sed 's/^/  /'
+            # Also check /opt/dhis2/logs if it exists, limit output line length
             if [ -d /opt/dhis2/logs ]; then
-              grep -iE 'authentication.*fail|unauthorized|forbidden' /opt/dhis2/logs/*.log 2>/dev/null \
-                | tail -5 | sed 's/^/  /'
+              grep -iE 'authentication.*fail|unauthorized|forbidden' /opt/dhis2/logs/*.log 2>/dev/null | \
+                tail -5 | cut -c1-160 | sed 's/^/  /'
             fi
           " >> "$REPORT" 2>/dev/null || echo "  No issues" >> "$REPORT"
 
-          # Failed login count
+          # Failed login count from journalctl (detect tomcat version)
           FAILED_LOGINS=$(lxc exec dhis -- bash -c "
             if systemctl list-units --all | grep -q tomcat10; then
               journalctl -u tomcat10 --since '24 hours ago' 2>/dev/null | grep -c 'authentication.*fail' || echo 0
@@ -108,6 +112,9 @@
             # Also check journal
             journalctl -u postgresql --since '24 hours ago' 2>/dev/null | grep -iE 'fatal|error' | tail -5 | sed 's/^/  /'
           " >> "$REPORT" 2>/dev/null || echo "  No issues" >> "$REPORT"
+
+          # System health checks
+          echo -e "\nSystem Health" >> "$REPORT"
 
           # Check container status
           for container in dhis proxy postgres monitor; do
@@ -154,8 +161,8 @@
     - name: Setup daily security check cron job
       ansible.builtin.cron:
         name: "DHIS2 Daily Security Check"
-        minute: "0"
-        hour: "{{ alert_time.split(':')[0] }}"
+        minute: "{{ alert_minute }}"
+        hour: "{{ alert_hour }}"
         job: "{{ security_monitor_dir }}/security-check.sh"
         user: root
         state: present
@@ -164,6 +171,7 @@
       ansible.builtin.cron:
         name: "DHIS2 Hourly Critical Check"
         minute: "0"
+        hour: "*"
         job: |
           lxc exec dhis -- bash -c '
             if systemctl list-units --all | grep -q tomcat10; then
@@ -208,8 +216,8 @@
       ansible.builtin.debug:
         msg:
           - "Security monitoring configured successfully!"
-          - "Daily reports at: {{ alert_time }}"
-          - "Hourly critical checks enabled"
+          - "Daily reports at: {{ alert_time }} ({{ alert_hour }}:{{ alert_minute }})"
+          - "Hourly critical checks enabled (every hour at minute 0)"
           - "Manual check: {{ security_monitor_dir }}/security-check.sh"
           - ""
           - "Log locations being monitored:"

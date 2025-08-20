@@ -140,18 +140,18 @@
         group: root
         content: |
           #!/bin/bash
-          
+
           # Check if report file is provided
           if [ $# -eq 0 ]; then
             echo "Usage: $0 <report_file>"
             echo "Or pipe input: echo 'message' | $0 /dev/stdin"
             exit 1
           fi
-          
+
           REPORT="$1"
           TOKEN="{{ telegram_bot_token }}"
           CHAT_ID="{{ telegram_chat_id }}"
-          
+
           # Check if report file exists or is stdin
           if [ "$REPORT" != "/dev/stdin" ] && [ ! -f "$REPORT" ]; then
             echo "Error: Report file '$REPORT' not found"
@@ -160,7 +160,7 @@
 
           # Send summary (first 30 lines for better visibility)
           TEXT=$(head -30 "$REPORT" 2>/dev/null)
-          
+
           if [ -n "$TEXT" ]; then
             curl -s -X POST "https://api.telegram.org/bot${TOKEN}/sendMessage" \
               -d "chat_id=${CHAT_ID}" \
